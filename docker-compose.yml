@@ -1,0 +1,92 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: judge-postgres
+    environment:
+      POSTGRES_DB: judge
+      POSTGRES_USER: judge
+      POSTGRES_PASSWORD: judge123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - judge-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U judge -d judge"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:4.0-management-alpine
+    container_name: judge-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: judge
+      RABBITMQ_DEFAULT_PASS: judge123
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - judge-network
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./judge-backend
+      dockerfile: Dockerfile
+    container_name: judge-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/judge
+      SPRING_DATASOURCE_USERNAME: judge
+      SPRING_DATASOURCE_PASSWORD: judge123
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: judge
+      SPRING_RABBITMQ_PASSWORD: judge123
+      JWT_SECRET: your-secret-key-change-this-in-production-min-256-bits-long
+    ports:
+      - "8080:8080"
+    networks:
+      - judge-network
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./judge-worker
+      dockerfile: Dockerfile
+    container_name: judge-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/judge
+      SPRING_DATASOURCE_USERNAME: judge
+      SPRING_DATASOURCE_PASSWORD: judge123
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: judge
+      SPRING_RABBITMQ_PASSWORD: judge123
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - judge-network
+    restart: unless-stopped
+
+networks:
+  judge-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
