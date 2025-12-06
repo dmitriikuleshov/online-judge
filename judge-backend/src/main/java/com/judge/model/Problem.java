@@ -48,10 +48,10 @@ public class Problem {
     @Builder.Default
     private String difficulty = "EASY";
 
-    @OneToMany(mappedBy = "problem", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY) // EAGER
+    @OneToMany(mappedBy = "problem", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER) // LAZY
     @JsonManagedReference
     @Builder.Default
-    private List<TestingCase> testCases = new ArrayList<>();
+    private List<TestingCase> testingCases = new ArrayList<>();
 
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default

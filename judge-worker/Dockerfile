@@ -1,19 +1,11 @@
-FROM maven:3.9-eclipse-temurin-21-alpine AS build
+FROM docker:24-dind
+
+RUN apk add --no-cache openjdk21-jre
+
 WORKDIR /app
-COPY pom.xml .
-COPY src ./src
-RUN mvn clean package -DskipTests
+COPY target/*.jar app.jar
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
 
-FROM eclipse-temurin:21-jre-alpine
-WORKDIR /app
-COPY --from=build /app/target/*.jar app.jar
-
-# Install Docker CLI
-RUN apk add --no-cache docker-cli
-
-# Add non-root user
-RUN addgroup -S spring && adduser -S spring -G spring
-USER spring:spring
-
-EXPOSE 8081
-ENTRYPOINT ["java", "-jar", "app.jar"]
+EXPOSE 8080
+ENTRYPOINT ["/start.sh"]

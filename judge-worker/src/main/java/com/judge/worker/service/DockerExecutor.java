@@ -3,7 +3,10 @@ package com.judge.worker.service;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.CreateContainerResponse;
 import com.github.dockerjava.api.command.WaitContainerResultCallback;
-import com.github.dockerjava.api.model.*;
+import com.github.dockerjava.api.model.Bind;
+import com.github.dockerjava.api.model.Frame;
+import com.github.dockerjava.api.model.HostConfig;
+import com.github.dockerjava.api.model.Volume;
 import com.github.dockerjava.core.DefaultDockerClientConfig;
 import com.github.dockerjava.core.DockerClientConfig;
 import com.github.dockerjava.core.DockerClientImpl;
@@ -32,6 +35,7 @@ public class DockerExecutor {
     public void init() {
         DockerClientConfig config = DefaultDockerClientConfig
                 .createDefaultConfigBuilder()
+                .withDockerHost("unix:///var/run/docker.sock")  // сокет dind
                 .build();
 
         ApacheDockerHttpClient httpClient = new ApacheDockerHttpClient.Builder()
@@ -42,7 +46,7 @@ public class DockerExecutor {
                 .build();
 
         this.dockerClient = DockerClientImpl.getInstance(config, httpClient);
-        log.info("Docker client initialized");
+        log.info("Docker client initialized for DinD");
     }
 
     public ExecutionResult executeJavaCode(String code, String input, int timeLimit) {
@@ -52,22 +56,22 @@ public class DockerExecutor {
         try {
             Files.createDirectories(workDirPath);
 
-            // Write Java code
+            // Записываем Solution.java
             File javaFile = workDirPath.resolve("Solution.java").toFile();
             try (FileWriter writer = new FileWriter(javaFile)) {
                 writer.write(code);
             }
 
-            // Write input
+            // Записываем input.txt
             File inputFile = workDirPath.resolve("input.txt").toFile();
             try (FileWriter writer = new FileWriter(inputFile)) {
                 writer.write(input != null ? input : "");
             }
 
-            // Create container
+            // Контейнер с bind-монтом рабочей директории
             HostConfig hostConfig = HostConfig.newHostConfig()
                     .withBinds(new Bind(workDir, new Volume("/workspace")))
-                    .withMemory(256L * 1024 * 1024) // 256 MB
+                    .withMemory(256L * 1024 * 1024)       // 256 MB
                     .withMemorySwap(256L * 1024 * 1024)
                     .withCpuQuota(50000L)
                     .withNetworkMode("none")
@@ -77,10 +81,11 @@ public class DockerExecutor {
                     "cd /workspace && " +
                             "javac Solution.java 2>&1 && " +
                             "timeout %ds java Solution < input.txt 2>&1",
-                    (timeLimit / 1000) + 1
+                    (timeLimit / 1000) + 1   // небольшой запас внутри контейнера
             );
 
-            CreateContainerResponse container = dockerClient.createContainerCmd("eclipse-temurin:21-jre-alpine")
+            CreateContainerResponse container = dockerClient
+                    .createContainerCmd("eclipse-temurin:21-jdk-alpine")
                     .withHostConfig(hostConfig)
                     .withCmd("/bin/sh", "-c", command)
                     .withWorkingDir("/workspace")
@@ -89,19 +94,18 @@ public class DockerExecutor {
                     .exec();
 
             String containerId = container.getId();
-            log.debug("Created container: {}", containerId);
+            log.debug("Created container in DinD: {}", containerId);
 
-            // Start container
             dockerClient.startContainerCmd(containerId).exec();
 
-            // Wait for completion with timeout
+            // Ждём завершения контейнера с небольшим внешним запасом
             long startTime = System.currentTimeMillis();
             Integer statusCode = dockerClient.waitContainerCmd(containerId)
                     .exec(new WaitContainerResultCallback())
                     .awaitStatusCode(timeLimit + 5000, TimeUnit.MILLISECONDS);
             long executionTime = System.currentTimeMillis() - startTime;
 
-            // Get logs
+            // Читаем stdout/stderr
             StringBuilder output = new StringBuilder();
             try {
                 dockerClient.logContainerCmd(containerId)
@@ -119,41 +123,45 @@ public class DockerExecutor {
                 log.error("Interrupted while reading logs", e);
             }
 
-            // Cleanup container
+            // Удаляем контейнер
             try {
                 dockerClient.removeContainerCmd(containerId).withForce(true).exec();
             } catch (Exception e) {
                 log.error("Error removing container", e);
             }
 
-            // Cleanup directory
+            // Удаляем временную директорию
             deleteDirectory(workDirPath);
 
+            // Формируем результат
             ExecutionResult result = new ExecutionResult();
             result.setOutput(output.toString().trim());
-            result.setExecutionTime((int) executionTime);
+            result.setExecutionTime((int) executionTime);           // общий wall-clock для отображения
             result.setExitCode(statusCode != null ? statusCode : -1);
 
-            if (executionTime > timeLimit) {
+            // ВЕРДИКТ — ТОЛЬКО ПО КОДАМ И ТАЙМАУТУ
+            if (statusCode == null) {
+                // контейнер не завершился за timeLimit+5000
                 result.setStatus("TIME_LIMIT_EXCEEDED");
-            } else if (statusCode == null) {
-                result.setStatus("TIME_LIMIT_EXCEEDED");
-            } else if (statusCode == 124) { // timeout exit code
+            } else if (statusCode == 124) {
+                // timeout внутри контейнера убил java
                 result.setStatus("TIME_LIMIT_EXCEEDED");
             } else if (statusCode != 0) {
+                // ненулевой код — либо компиляция, либо рантайм
                 if (output.toString().contains("error:") || output.toString().contains("Exception")) {
                     result.setStatus("COMPILATION_ERROR");
                 } else {
                     result.setStatus("RUNTIME_ERROR");
                 }
             } else {
+                // statusCode == 0
                 result.setStatus("SUCCESS");
             }
 
             return result;
 
         } catch (Exception e) {
-            log.error("Error executing code", e);
+            log.error("Error executing code in DinD", e);
             ExecutionResult result = new ExecutionResult();
             result.setStatus("SYSTEM_ERROR");
             result.setOutput("System error: " + e.getMessage());

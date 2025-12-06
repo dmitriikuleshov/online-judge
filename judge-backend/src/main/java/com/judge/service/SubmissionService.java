@@ -35,7 +35,7 @@ public class SubmissionService {
                 .code(request.getCode())
                 .language(request.getLanguage().toUpperCase())
                 .status("PENDING")
-                .totalTestCases(problem.getTestCases().size())
+                .totalTestCases(problem.getTestingCases().size())
                 .build();
 
         submission = submissionRepository.save(submission);

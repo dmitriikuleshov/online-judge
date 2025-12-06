@@ -29,8 +29,8 @@ public class ProblemService {
     @Transactional
     public Problem createProblem(Problem problem) {
         // Set bidirectional relationship
-        if (problem.getTestCases() != null) {
-            for (TestingCase testCase : problem.getTestCases()) {
+        if (problem.getTestingCases() != null) {
+            for (TestingCase testCase : problem.getTestingCases()) {
                 testCase.setProblem(problem);
             }
         }

@@ -65,6 +65,7 @@ services:
       context: ./judge-worker
       dockerfile: Dockerfile
     container_name: judge-worker
+    privileged: true                    # Обязательно для dind
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,11 +79,12 @@ services:
       SPRING_RABBITMQ_PORT: 5672
       SPRING_RABBITMQ_USERNAME: judge
       SPRING_RABBITMQ_PASSWORD: judge123
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      DOCKER_HOST: unix:///var/run/docker.sock  # Теперь это внутренний сокет dind
+      DOCKER_TLS_CERTDIR: ""            # Отключаем TLS для упрощения
     networks:
       - judge-network
     restart: unless-stopped
+    # volumes: НЕ монтируем хостовый docker.sock
 
 networks:
   judge-network:
